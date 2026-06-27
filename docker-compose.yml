@@ -1,0 +1,37 @@
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: auca_mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=${MONGO_DB_NAME:-auca_analytics}
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+    networks:
+      - bigdata_network
+
+  hbase:
+    image: harisekhon/hbase:2.1
+    container_name: auca_hbase
+    hostname: auca_hbase
+    ports:
+      - "2181:2181"   # ZooKeeper
+      - "16010:16010" # HBase Master Web UI
+      - "9090:9090"   # Thrift
+    environment:
+      - HBASE_TYPE=thrift
+    volumes:
+      - hbase_data:/hbase/data
+    restart: unless-stopped
+    networks:
+      - bigdata_network
+
+volumes:
+  mongodb_data:
+  hbase_data:
+
+networks:
+  bigdata_network:
+    driver: bridge

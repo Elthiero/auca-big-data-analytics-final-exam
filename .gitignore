@@ -1,0 +1,15 @@
+__pycache__/*
+pycache/
+*.pyc
+*.pyo
+.env
+venv/
+data/
+md/
+.vscode/
+md/
+report/
+*.pdf
+*.log
+*.aux
+*.out
