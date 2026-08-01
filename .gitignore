@@ -7,11 +7,11 @@ venv/
 data/
 md/
 .vscode/
-md/
-report/
-*.pdf
 *.log
 *.aux
 *.out
-command.txt
-demo_queries.md
+
+# Report rules grouped together
+report/*
+*.pdf
+!report/final_report.pdf

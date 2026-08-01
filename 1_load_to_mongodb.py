@@ -267,6 +267,9 @@ def load_mongodb():
     for result in db.transactions.aggregate(pipeline):
         user_stats[result["_id"]] = result
 
+    # Derive segment boundaries from the observed distribution before tagging
+    thresholds = compute_segmentation_thresholds(user_stats)
+
     # Update users with their lifetime summaries
     for user_id, stats in user_stats.items():
         db.users.update_one(
@@ -279,7 +282,7 @@ def load_mongodb():
                     "lifetime_summary.first_purchase_date": stats["first_purchase"],
                     "lifetime_summary.last_purchase_date": stats["last_purchase"],
                     # Add segmentation tag based on spending
-                    "segmentation_tags": get_segmentation_tags(stats),
+                    "segmentation_tags": get_segmentation_tags(stats, thresholds),
                 }
             },
         )
@@ -293,20 +296,57 @@ def load_mongodb():
     client.close()
 
 
-def get_segmentation_tags(stats):
-    """Determine user segmentation tags based on purchase behavior"""
+def compute_segmentation_thresholds(user_stats):
+    """
+    Derive segment boundaries from the observed distribution rather than from
+    fixed dollar amounts.
+
+    Fixed thresholds are only meaningful relative to a known average order
+    value. On this dataset the mean lifetime spend is roughly $26,000 across
+    ~32 completed purchases per user, so absolute cut-offs of $1,000 and 10
+    purchases place every single user in the top tier and leave the lower
+    tiers empty. Quantiles adapt to whatever distribution is present and keep
+    the segments populated as catalogue and order value shift.
+    """
+    spends = sorted(s["total_spent"] for s in user_stats.values())
+    counts = sorted(s["transaction_count"] for s in user_stats.values())
+
+    def pct(sorted_vals, q):
+        if not sorted_vals:
+            return 0
+        idx = min(int(len(sorted_vals) * q), len(sorted_vals) - 1)
+        return sorted_vals[idx]
+
+    thresholds = {
+        "spend_high": pct(spends, 0.80),    # top 20% by spend
+        "spend_mid": pct(spends, 0.40),     # middle 40%
+        "count_high": pct(counts, 0.80),    # top 20% by frequency
+        "count_mid": pct(counts, 0.40),
+    }
+
+    logger.info(
+        "Segmentation thresholds (quantile-derived): "
+        f"spend p80=${thresholds['spend_high']:,.0f}, "
+        f"p40=${thresholds['spend_mid']:,.0f}; "
+        f"count p80={thresholds['count_high']}, p40={thresholds['count_mid']}"
+    )
+    return thresholds
+
+
+def get_segmentation_tags(stats, thresholds):
+    """Assign value and frequency tags relative to the cohort distribution."""
     tags = []
 
-    if stats["total_spent"] > 1000:
+    if stats["total_spent"] >= thresholds["spend_high"]:
         tags.append("high_value")
-    elif stats["total_spent"] > 500:
+    elif stats["total_spent"] >= thresholds["spend_mid"]:
         tags.append("medium_value")
     elif stats["total_spent"] > 0:
         tags.append("low_value")
 
-    if stats["transaction_count"] > 10:
+    if stats["transaction_count"] >= thresholds["count_high"]:
         tags.append("frequent_buyer")
-    elif stats["transaction_count"] > 3:
+    elif stats["transaction_count"] >= thresholds["count_mid"]:
         tags.append("regular_buyer")
     elif stats["transaction_count"] > 0:
         tags.append("new_buyer")
