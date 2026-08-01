@@ -4,9 +4,6 @@ Final project for the AUCA Big Data Analytics course. An end-to-end analytics
 pipeline over a synthetic e-commerce dataset using **MongoDB** (document store),
 **HBase** (wide-column store), and **Apache Spark** (distributed processing).
 
-**Author**: Ahourdet Donambi Thierry (101201)
-**Technical report**: [`report/final_exam.pdf`](report/final_exam.pdf)
-
 ---
 
 ## System Architecture
