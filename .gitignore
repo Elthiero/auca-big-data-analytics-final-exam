@@ -5,13 +5,8 @@ pycache/
 .env
 venv/
 data/
-md/
 .vscode/
 *.log
 *.aux
 *.out
 
-# Report rules grouped together
-report/*
-*.pdf
-!report/final_report.pdf
