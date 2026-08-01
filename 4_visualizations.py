@@ -80,9 +80,7 @@ def _require(path, chart_name):
     return False
 
 
-# ---------------------------------------------------------------------------
 # CHART 1 -- Revenue by region (source: Spark SQL)
-# ---------------------------------------------------------------------------
 def chart_state_revenue():
     path = os.path.join(RESULTS_DIR, "state_revenue.csv")
     if not _require(path, "state revenue"):
@@ -126,9 +124,7 @@ def chart_state_revenue():
     logger.info(f"Saved: {out}")
 
 
-# ---------------------------------------------------------------------------
 # CHART 2 -- Product affinity, annotated with its random baseline
-# ---------------------------------------------------------------------------
 def chart_product_affinity():
     path = os.path.join(RESULTS_DIR, "product_affinity.csv")
     if not _require(path, "product affinity"):
@@ -177,9 +173,7 @@ def chart_product_affinity():
     logger.info(f"Saved: {out}")
 
 
-# ---------------------------------------------------------------------------
 # CHART 3 -- Daily revenue by category (source: MongoDB materialised view)
-# ---------------------------------------------------------------------------
 def chart_category_revenue_over_time(db, top_n=5):
     rows = list(
         db.daily_sales_by_category.find(
@@ -229,9 +223,7 @@ def chart_category_revenue_over_time(db, top_n=5):
     logger.info(f"Saved: {out}")
 
 
-# ---------------------------------------------------------------------------
 # CHART 4 -- Customer segmentation (source: MongoDB users.segmentation_tags)
-# ---------------------------------------------------------------------------
 def chart_user_segmentation(db):
     pipeline = [
         {"$match": {"segmentation_tags": {"$ne": []}}},

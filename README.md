@@ -215,11 +215,16 @@ relatedness — which is exactly what lift and PMI are designed to correct.
 MongoDB (`docker exec -it auca_mongodb mongosh ecommerce_analytics`):
 
 ```javascript
+db.getCollectionNames()
+db.getCollectionNames().forEach(c => print(c, db[c].countDocuments()))
 db.users.countDocuments()          // 10000
 db.transactions.countDocuments()   // 500000
 db.products.findOne()              // embedded category.subcategory
 db.users.findOne({ segmentation_tags: "high_value" })
 db.transactions.find({ user_id: "user_000042" }).explain("executionStats")
+
+db.getCollectionInfos()        // names plus type — shows which are views
+db.stats()                     // db size, collection count, index size
 ```
 
 HBase (`docker exec -it auca_hbase hbase shell`):
