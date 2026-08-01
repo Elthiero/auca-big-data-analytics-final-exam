@@ -1,8 +1,23 @@
-faker>=18.0.0
-numpy>=1.24.0
-pymongo>=4.5.0
-happybase>=1.2.0
-pyspark>=3.4.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-python-dotenv>=1.0.0
+# Data generation
+faker>=40.21.0
+numpy>=2.4.6
+
+# Storage clients
+pymongo>=4.17.0          # MongoDB driver
+happybase>=1.3.0         # HBase Thrift client (pulls in thriftpy2)
+
+# Distributed processing
+pyspark>=4.1.2           # pulls in py4j
+
+# Analysis and presentation
+pandas>=3.0.3            # DataFrame.toPandas() handoff + chart data prep
+matplotlib>=3.10.9
+seaborn>=0.13.2
+
+# Configuration
+python-dotenv>=1.2.2
+
+# Optional
+pyarrow>=15.0.0        # speeds up Spark -> pandas conversion; Spark logs a
+#                        # warning without it but falls back correctly
+ipykernel>=7.3.0       # only needed to run dataset_generator.ipynb

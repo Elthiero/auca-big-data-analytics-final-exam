@@ -1,72 +1,273 @@
 # Distributed Multi-Model Analytics for E-Commerce Data
 
-This repository contains the final project for the AUCA Big Data Analytics course. It implements an end‑to‑end analytics pipeline for a synthetic e‑commerce dataset using **MongoDB** (document store), **HBase** (wide‑column store), and **Apache Spark** (distributed processing).
+Final project for the AUCA Big Data Analytics course. An end-to-end analytics
+pipeline over a synthetic e-commerce dataset using **MongoDB** (document store),
+**HBase** (wide-column store), and **Apache Spark** (distributed processing).
 
-## System Architecture Overview  
-
-The system is deployed using Docker Compose, with three core components orchestrated as follows:
-
-![Architecture Diagram](screenshots/system_design.jpg)  
-*Figure 1: End‑to‑end data pipeline – data generation → ingestion into MongoDB/HBase → Spark processing → visualisation*
-
-**Data Generation** (`generator.py`) produces JSON files for users, categories, products, sessions (split into 20 chunks) and transactions.  
-**Data Ingestion**  
-
-- MongoDB: `1_load_to_mongodb.py` transforms and loads entities with embedded summaries and materialised views.  
-- HBase: `1_load_to_hbase.py` creates two tables (`user_sessions`, `product_metrics`) using Thrift and loads session data with sparse activity columns.  
-**Processing**  
-- Apache Spark (`2_spark_analysis.py`) reads raw JSON, cleans data, computes product affinities, and executes SQL analytics.  
-- Integration scripts (`3_integrated_analytics.py`, `3_integrated_visual.py`) combine MongoDB and HBase data to produce funnel metrics and user‑journey reconstructions.  
-**Visualisation**  
-- `4_visualizations.py` generates static charts using Matplotlib and Seaborn.
-
-## Table of Contents
-
-- [Distributed Multi-Model Analytics for E-Commerce Data](#distributed-multi-model-analytics-for-e-commerce-data)
-  - [System Architecture Overview](#system-architecture-overview)
-  - [Table of Contents](#table-of-contents)
-  - [Overview](#overview)
-  - [Repository Structure](#repository-structure)
-  - [Prerequisites](#prerequisites)
-  - [Setup \& Installation](#setup--installation)
-    - [1. Clone the repository](#1-clone-the-repository)
-    - [2. Create a virtual environment (recommended)](#2-create-a-virtual-environment-recommended)
-    - [3. Install Python dependencies](#3-install-python-dependencies)
-    - [4. Configure environment variables](#4-configure-environment-variables)
-  - [Step-by-Step Execution](#step-by-step-execution)
-    - [1. Start the Containers](#1-start-the-containers)
-    - [2. Generate the Dataset](#2-generate-the-dataset)
-    - [3. Load Data into MongoDB](#3-load-data-into-mongodb)
-    - [4. Load Data into HBase](#4-load-data-into-hbase)
-    - [5. Run Spark Analytics](#5-run-spark-analytics)
-    - [6. Run Integrated Analytics](#6-run-integrated-analytics)
-      - [6.1 Conversion Funnel (Macro)](#61-conversion-funnel-macro)
-      - [6.2 User Journey Reconstruction (Micro)](#62-user-journey-reconstruction-micro)
-    - [7. Generate Visualizations](#7-generate-visualizations)
-  - [Outputs](#outputs)
-  - [Troubleshooting](#troubleshooting)
-  - [Environment Variables](#environment-variables)
-  - [License](#license)
+**Author**: Ahourdet Donambi Thierry (101201)
+**Technical report**: [`report/final_exam.pdf`](report/final_exam.pdf)
 
 ---
 
-## Overview
+## System Architecture
 
-The project demonstrates how to:
+![Architecture Diagram](screenshots/system_design.jpg)
+*Data generation → ingestion into MongoDB/HBase → Spark processing → visualisation*
 
-- Design query‑driven schemas in MongoDB (embedding categories, lifetime summaries, and transaction line items).
-- Leverage HBase’s sparse wide‑column model for time‑series clickstream data (reversed‑timestamp row keys, dynamic column qualifiers).
-- Use PySpark for data cleaning, batch processing (product co‑occurrence matrix), and SQL‑based cohort analysis.
-- Integrate both databases to compute a cross‑system conversion funnel and reconstruct a user’s chronological journey.
-- Generate actionable business visualisations (funnel, geographic revenue, product affinity).
+| Stage | Script | What it does |
+|---|---|---|
+| Generation | `generator.py` | Writes JSON for users, categories, products, transactions, and sessions (20 chunks) |
+| Ingestion | `1_load_to_mongodb.py` | Loads entities with embedded category hierarchies, lifetime summaries, and a materialised view |
+| Ingestion | `1_load_to_hbase.py` | Creates `user_sessions` and `product_metrics`; loads sessions as sparse activity columns |
+| Processing | `2_spark_analysis.py` | Cleans data, builds a product co-occurrence matrix with a random baseline, runs Spark SQL; writes `results/*.csv` |
+| Integration | `3_integrated_visual.py` | Cross-store conversion funnel (HBase carts + MongoDB purchases) |
+| Integration | `3_integrated_analytics.py` | Reconstructs one user's click path to purchase across both stores |
+| Presentation | `4_visualizations.py` | Four static charts from `results/` and MongoDB |
 
-**Technology Stack**:
+---
 
-- **MongoDB** (6.0) – document database
-- **HBase** (2.1) – wide‑column store (Thrift API on port 9090)
-- **Apache Spark** (3.x) – distributed processing (local mode)
-- **Python** (3.8+) – ingestion, analysis, and visualisation
-- **Docker** & **Docker Compose** – container orchestration
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [Execution](#execution)
+- [Outputs](#outputs)
+- [Findings and Analytical Validity](#findings-and-analytical-validity)
+- [Verification Queries](#verification-queries)
+- [Troubleshooting](#troubleshooting)
+- [Environment Variables](#environment-variables)
+
+---
+
+## Prerequisites
+
+- **Docker** and **Docker Compose** (>= 2.0)
+- **Python 3.10+** with `pip`
+- **8 GB RAM** minimum (Spark and HBase are both memory-hungry)
+- **~2 GB** free disk for the generated dataset
+
+---
+
+## Setup
+
+```bash
+git clone https://github.com/Elthiero/auca-big-data-analytics-final-exam.git
+cd auca-big-data-analytics-final-exam
+
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+
+pip install -r requirements.txt
+cp .env.example .env              # defaults work for the local Docker setup
+```
+
+---
+
+## Execution
+
+Run everything from the repository root, in this order. **Steps 5 and 6 depend
+on `results/`, which step 4 creates**, so do not reorder them.
+
+Measured runtimes are from a full run on a laptop (see
+[screenshots/](screenshots/)); yours will vary.
+
+### 1. Start the containers
+
+```bash
+docker-compose up -d
+docker-compose ps                 # both services must show "Up"
+```
+
+HBase needs 30-60 seconds to bring up its Thrift server. Confirm with:
+
+```bash
+docker-compose logs -f hbase      # wait for "ThriftServer started"
+```
+
+### 2. Generate the dataset — *~5-10 min*
+
+```bash
+python generator.py
+```
+
+Produces in `data/`: 10,000 users, 25 categories, 5,000 products,
+500,000 transactions, and 2,000,000 sessions split across
+`sessions_0.json` … `sessions_19.json`. Progress logs every 50k iterations.
+
+### 3. Load MongoDB — *~27 s*
+
+```bash
+python 1_load_to_mongodb.py
+```
+
+Embeds category hierarchies into products, computes `lifetime_summary` and
+`segmentation_tags` per user, denormalises product and category names into
+transaction line items, creates indexes, and builds the
+`daily_sales_by_category` materialised view.
+
+### 4. Load HBase — *~11 min*
+
+```bash
+python 1_load_to_hbase.py
+```
+
+Creates `user_sessions` (row key `user_id|reversed_timestamp`; families
+`session`, `geo`, `device`, `activity`) and `product_metrics` (row key
+`product_id|YYYYMMDD`). Expect a final `Total sessions loaded: 2000000`.
+
+> The bulk of this time is Thrift round-trips, not HBase itself. Loading via
+> the native Java API or an HFile bulk load would be substantially faster.
+
+### 5. Spark analytics — *~1-3.5 min*
+
+```bash
+python 2_spark_analysis.py
+```
+
+Three tasks: cleaning with explicit schemas, a product co-occurrence matrix
+with a random baseline, and a Spark SQL join for revenue by region.
+Writes `results/product_affinity.csv`, `results/state_revenue.csv`, and
+`results/affinity_baseline.csv`.
+
+### 6. Integrated analytics
+
+```bash
+python 3_integrated_visual.py       # ~3 min — scans 2M HBase rows
+python 3_integrated_analytics.py    # ~1 s
+```
+
+The first computes the cross-store funnel and saves `conversion_funnel.png`.
+The second picks a completed transaction from MongoDB, locates its session via
+a user-scoped HBase prefix scan, and prints the chronological click path.
+
+### 7. Charts
+
+```bash
+python 4_visualizations.py
+```
+
+Reads `results/*.csv` and MongoDB. No values are hard-coded, so the charts
+regenerate with the pipeline. Each chart skips with a warning if its upstream
+source is missing rather than failing the run.
+
+---
+
+## Outputs
+
+### Charts (`visualizations/`)
+
+| File | Source | Shows |
+|---|---|---|
+| `conversion_funnel.png` | HBase + MongoDB | Sessions → carts → completed purchases |
+| `state_revenue.png` | `results/state_revenue.csv` | Top 10 regions by revenue |
+| `product_affinity.png` | `results/product_affinity.csv` | Top co-viewed pairs, annotated with the random baseline |
+| `category_revenue_trend.png` | MongoDB materialised view | Daily revenue, top 5 categories, 7-day rolling mean |
+| `user_segmentation.png` | MongoDB `users` | Users per segment and average lifetime spend |
+
+### Data products (`results/`)
+
+| File | Contents |
+|---|---|
+| `state_revenue.csv` | Top 10 regions: users, revenue, average order value |
+| `product_affinity.csv` | Top 5 co-viewed product pairs with counts |
+| `affinity_baseline.csv` | Distinct products, pair instances, candidate pairs, expected count per pair, observed max |
+
+---
+
+## Findings and Analytical Validity
+
+Every headline result was checked against `generator.py` to determine whether
+the underlying variable carries structure or is assigned at random. Three of
+five do not survive that check, and are reported as negative results.
+
+| Analysis | Mechanism | Business signal | Limiting factor |
+|---|---|---|---|
+| Conversion funnel | Valid | Partial | Numerator and denominator drawn from different populations |
+| Regional revenue | Valid | **None** | Ranks user count, not demand |
+| Product affinity | Valid | **Confounded** | Raw counts rank popularity; needs lift/PMI |
+| Category revenue trend | Valid | **None** | `random.choice` on categories |
+| Customer segmentation | Valid | Present | Thresholds are fixed rather than quantile-based |
+
+**Funnel** — 2,000,000 sessions; 1,298,408 (64.92%) reached a cart;
+317,055 completed purchases; 15.85% overall conversion. The purchase count
+includes transactions generated without a parent session
+(`session_id = null`), which have no cart event in HBase, so 24.42% is an
+upper bound on the true cart-to-purchase rate, not a measurement of it.
+
+**Regional revenue** — revenue spread across the top 10 is 19.1%, user-count
+spread is 18.9%, and revenue *per user* varies by only 6.1% ($25,913-$27,497).
+Revenue tracks user count almost exactly, and state is assigned by
+`fake.state_abbr()`. The ranking is a user-count ranking; 10,000 users over
+~56 regions gives ~179 expected each, and New York's 214 is the expected
+maximum of 56 draws. No targeting decision follows from this chart.
+
+**Product affinity** — expected count per pair is 0.9673; the observed maximum
+is 14, with five pairs tied. That is *not* explicable as chance: a homogeneous
+Poisson model predicts a maximum near 10. But it is not affinity either. The
+generator draws each product view independently, so no co-view structure
+exists; the excess comes from unequal product popularity created by the
+`is_active and current_stock > 0` rejection loop in `get_page_content()`
+combined with inventory depletion. Popular pairs get high *raw* counts while
+their lift stays near 1. Raw co-occurrence measures popularity, not
+relatedness — which is exactly what lift and PMI are designed to correct.
+
+---
+
+## Verification Queries
+
+MongoDB (`docker exec -it auca_mongodb mongosh ecommerce_analytics`):
+
+```javascript
+db.users.countDocuments()          // 10000
+db.transactions.countDocuments()   // 500000
+db.products.findOne()              // embedded category.subcategory
+db.users.findOne({ segmentation_tags: "high_value" })
+db.transactions.find({ user_id: "user_000042" }).explain("executionStats")
+```
+
+HBase (`docker exec -it auca_hbase hbase shell`):
+
+```
+list
+scan 'user_sessions', {LIMIT => 1}
+scan 'user_sessions', {ROWPREFIXFILTER => 'user_000042|', LIMIT => 5}
+scan 'user_sessions', {ROWPREFIXFILTER => 'user_000042|', COLUMNS => ['device']}
+scan 'product_metrics', {ROWPREFIXFILTER => 'prod_00123|'}
+```
+
+> **Never run a bare `scan 'user_sessions'`** — it will attempt to return 2M
+> rows. Always constrain with `LIMIT` or `ROWPREFIXFILTER`.
+
+---
+
+## Troubleshooting
+
+| Issue | Cause | Fix |
+|---|---|---|
+| `TTransportException` / `TSocket read 0 bytes` | Thrift server not ready | `docker-compose logs hbase`, wait for `ThriftServer started`, re-run |
+| `ServerSelectionTimeoutError` | MongoDB not running or port 27017 taken | `docker-compose ps` |
+| `4_visualizations.py` logs "Skipping ... missing results/..." | Step 5 not run | Run `2_spark_analysis.py` first |
+| Charts 3-4 skipped with "MongoDB unavailable" | Container down or DB not loaded | Start containers, run `1_load_to_mongodb.py` |
+| `OutOfMemoryError` in Spark | Schema inference on large JSON | Scripts use explicit schemas; if it persists raise `spark.driver.memory` in `2_spark_analysis.py` |
+| Spark job feels slow | `multiline=true` makes JSON non-splittable, so each file is one task | Known limitation; JSON Lines output from the generator would allow partitioning |
+| `generator.py` is slow | 2M sessions is CPU-bound | Normal; progress logs every 50k |
+| Scripts cannot find `data/` | Generator not run, or wrong working directory | Run from the repository root after `generator.py` |
+
+---
+
+## Environment Variables
+
+`.env` overrides the defaults in `config.py`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `MONGO_URI` | `mongodb://localhost:27017/` | MongoDB connection string |
+| `MONGO_DB_NAME` | `ecommerce_analytics` | Database used by all scripts |
+| `HBASE_HOST` | `localhost` | Thrift host |
+| `HBASE_PORT` | `9090` | Thrift port |
+| `SPARK_APP_NAME` | `ECommerceAnalytics` | Name shown in the Spark UI |
+| `SPARK_MASTER` | `local[*]` | Master URL |
 
 ---
 
@@ -74,247 +275,28 @@ The project demonstrates how to:
 
 ```text
 .
-├── docker-compose.yml          # MongoDB & HBase container definitions
-├── config.py                   # Central configuration (loads .env)
-├── logger.py                   # Standardised logging utility
-├── generator.py                # Synthetic dataset generator (2M sessions, 500k transactions)
+├── docker-compose.yml          # MongoDB & HBase containers
+├── config.py                   # Centralised configuration
+├── logger.py                   # Standardised logging
+├── generator.py                # Synthetic dataset generator
 ├── 1_load_to_mongodb.py        # MongoDB ingestion + aggregation pipelines
-├── 1_load_to_hbase.py          # HBase table creation & session loading
+├── 1_load_to_hbase.py          # HBase schema creation & session loading
 ├── 2_spark_analysis.py         # PySpark cleaning, affinity matrix, Spark SQL
-├── 3_integrated_visual.py      # Integrated funnel analysis (HBase + MongoDB)
-├── 3_integrated_analytics.py   # User journey reconstruction (cross‑system)
-├── 4_visualizations.py         # Static chart generation (state revenue & affinity)
-├── requirements.txt            # Python dependencies
-├── .env.example                # Template for environment variables
-├── data/                       # Generated JSON files (created by generator.py)
-└── visualizations/             # Output charts (created by scripts)
+├── 3_integrated_visual.py      # Cross-store conversion funnel
+├── 3_integrated_analytics.py   # Cross-store user-journey reconstruction
+├── 4_visualizations.py         # Static chart generation
+├── requirements.txt
+├── .env.example
+├── data/                       # Generated JSON (gitignored)
+├── results/                    # Spark CSV outputs
+├── visualizations/             # Output charts
+├── screenshots/                # Execution evidence
+└── report/final_exam.pdf       # Technical report
 ```
-
----
-
-## Prerequisites
-
-- **Docker** and **Docker Compose** (≥ 2.0)
-- **Python 3.8+** with `pip`
-- At least **8 GB RAM** (Spark and HBase together are memory‑hungry)
-- ~ **2 GB free disk space** for the generated dataset
-
----
-
-## Setup & Installation
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/Elthiero/auca-big-data-analytics-final-exam.git
-cd auca-big-data-analytics-final-exam
-```
-
-### 2. Create a virtual environment (recommended)
-
-```bash
-python -m venv venv
-source venv/bin/activate      # Linux/macOS
-# or
-venv\Scripts\activate         # Windows
-```
-
-### 3. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-**Contents of `requirements.txt`**:
-
-```text
-faker>=18.0.0
-numpy>=1.24.0
-pymongo>=4.5.0
-happybase>=1.2.0
-pyspark>=3.4.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-python-dotenv>=1.0.0
-```
-
-### 4. Configure environment variables
-
-Copy the example environment file and adjust if needed:
-
-```bash
-cp .env.example .env
-```
-
-Default values already work for the local Docker setup. See [Environment Variables](#environment-variables) for details.
-
----
-
-## Step-by-Step Execution
-
-> **Important**: Run all commands from the repository root directory.
-
-### 1. Start the Containers
-
-Launch MongoDB and HBase in the background:
-
-```bash
-docker-compose up -d
-```
-
-Wait **30–60 seconds** for HBase to fully initialise its Thrift server. You can check the logs:
-
-```bash
-docker-compose logs -f hbase
-```
-
-When you see `ThriftServer started`, HBase is ready.
-
-### 2. Generate the Dataset
-
-The generator produces:
-
-- `users.json` (10 000 users)
-- `categories.json` (25 categories)
-- `products.json` (5 000 products)
-- `transactions.json` (500 000 transactions)
-- `sessions_0.json` … `sessions_19.json` (2 000 000 sessions, split into 20 chunks)
-
-```bash
-python generator.py
-```
-
-**Estimated time**: ~5–10 minutes depending on your machine. The script logs progress every 50k iterations.
-
-### 3. Load Data into MongoDB
-
-This script transforms the raw JSON into the final document model:
-
-- Embeds category hierarchies into products.
-- Adds `lifetime_summary` and `segmentation_tags` to users.
-- Denormalises product names/categories into transaction items.
-- Creates the `daily_sales_by_category` materialised view.
-
-```bash
-python 1_load_to_mongodb.py
-```
-
-**Expected output**: Log messages showing counts of loaded documents and index creation.
-
-### 4. Load Data into HBase
-
-This script creates two HBase tables:
-
-- `user_sessions`: row key `user_id|reversed_timestamp`, with column families `session`, `geo`, `device`, `activity`.
-- `product_metrics`: row key `product_id|YYYYMMDD`, with column families `daily`, `aggregates`.
-
-It then reads all `sessions_*.json` files and inserts them in batches.
-
-```bash
-python 1_load_to_hbase.py
-```
-
-**Note**: HBase Thrift might time out if the container hasn’t fully started. If you see `TTransportException`, wait a minute and re‑run.
-
-**Expected output**: A log line showing `Total sessions loaded: 2000000`.
-
-### 5. Run Spark Analytics
-
-This script performs three main tasks:
-
-- **Data Cleaning**: explicit schemas, timestamp casting, null handling.
-- **Batch Processing**: computes a product co‑occurrence matrix (“users who viewed X also viewed Y”).
-- **Spark SQL**: joins users and transactions to find top‑revenue states.
-
-```bash
-python 2_spark_analysis.py
-```
-
-**Expected output**:
-
-- Top 5 product affinity pairs (printed to console).
-- Top 10 states by revenue (printed to console).
-
-### 6. Run Integrated Analytics
-
-#### 6.1 Conversion Funnel (Macro)
-
-This script scans HBase for total sessions and cart‑add events, then queries MongoDB for completed purchases, and saves a funnel chart.
-
-```bash
-python 3_integrated_visual.py
-```
-
-This scans **2 million rows** in HBase via the Thrift client and may take **3–5 minutes**. The output chart is saved as `visualizations/conversion_funnel.png`.
-
-#### 6.2 User Journey Reconstruction (Micro)
-
-This script picks a random completed transaction from MongoDB, finds its corresponding session in HBase, and reconstructs the chronological page‑view sequence.
-
-```bash
-python 3_integrated_analytics.py
-```
-
-**Expected output**: A nicely formatted console print showing each step (page type, duration, product ID) leading to the purchase.
-
-### 7. Generate Visualizations
-
-Finally, generate the remaining two static charts:
-
-- `state_revenue.png` – Top 10 states by revenue.
-- `product_affinity.png` – Top 5 co‑viewed product pairs.
-
-```bash
-python 4_visualizations.py
-```
-
-All charts are saved in the `visualizations/` directory.
-
----
-
-## Outputs
-
-After running all steps, you should have:
-
-| File | Description |
-|------|-------------|
-| `visualizations/conversion_funnel.png` | Funnel: total sessions → carts → purchases |
-| `visualizations/state_revenue.png` | Bar chart of revenue per state |
-| `visualizations/product_affinity.png` | Horizontal bar chart of product pairs |
-| Console logs | Progress, warnings, and query results from each script |
-
----
-
-## Troubleshooting
-
-| Issue | Likely Cause | Solution |
-|-------|--------------|----------|
-| `TTransportException` / `TSocket read 0 bytes` | HBase Thrift server not ready or using REST port. | Check `docker-compose logs hbase`. Ensure `HBASE_TYPE=thrift` is set. Restart with `docker-compose restart hbase`. |
-| `OutOfMemoryError` in Spark | Spark tries to infer schema on large JSON files. | The script uses explicit schemas to prevent this. If it still occurs, increase driver memory in `config.py` or set `SPARK_MEM` environment variable. |
-| `pymongo.errors.ServerSelectionTimeoutError` | MongoDB container not running or port 27017 is occupied. | Run `docker-compose ps` to verify both containers are `Up`. |
-| HBase table creation fails with `TypeError: endswith first arg must be bytes` | Byte‑string passed in column‑family definition. | The script uses plain strings for family names – this error should not occur. If it does, remove `b''` prefixes from family dictionaries. |
-| `generator.py` runs very slowly | Generating 2M sessions is CPU‑intensive. | It is normal. Let it run; progress is logged every 50k iterations. |
-| Scripts cannot find `data/` folder | Generator not run yet, or running from wrong directory. | Ensure you are in the repository root and have run `python generator.py` first. |
-
----
-
-## Environment Variables
-
-The `.env` file (optional) overrides defaults in `config.py`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `MONGO_URI` | `mongodb://localhost:27017/` | MongoDB connection string |
-| `MONGO_DB_NAME` | `ecommerce_analytics` | Database name used by all scripts |
-| `HBASE_HOST` | `localhost` | HBase Thrift server host |
-| `HBASE_PORT` | `9090` | HBase Thrift port |
-| `SPARK_APP_NAME` | `ECommerceAnalytics` | Application name shown in Spark UI |
-| `SPARK_MASTER` | `local[*]` | Spark master URL (use `local[*]` for all cores) |
 
 ---
 
 ## License
 
-This project was developed for educational purposes as part of the AUCA Big Data Analytics course.  
-All code is provided “as is” for demonstration and learning.
+Developed for educational purposes as part of the AUCA Big Data Analytics
+course. Provided as is.
