@@ -7,6 +7,39 @@ from logger import get_logger
 
 logger = get_logger("integrated_analytics")
 
+
+def parse_pv_qualifier(col_name):
+    """
+    Decompose a page-view column qualifier into its parts.
+
+    Written by 1_load_to_hbase.py as:
+        activity:pv_{reversed_ts}_{page_type}_{sequence:03d}
+
+    The page_type itself may contain underscores ('category_listing',
+    'product_detail'), so it must be rejoined from the middle segments
+    rather than read from a fixed index.
+    """
+    parts = col_name.split('_')
+    # parts[0] == 'activity:pv', parts[1] == reversed_ts, parts[-1] == sequence
+    if len(parts) < 4:
+        return {"page_type": "unknown", "reversed_ts": 0, "sequence": 0}
+
+    try:
+        reversed_ts = int(parts[1])
+    except ValueError:
+        reversed_ts = 0
+    try:
+        sequence = int(parts[-1])
+    except ValueError:
+        sequence = 0
+
+    page_type = "_".join(parts[2:-1]) or "unknown"
+    return {
+        "page_type": page_type,
+        "reversed_ts": reversed_ts,
+        "sequence": sequence,
+    }
+
 class IntegratedAnalytics:
     """
     Demonstrates cross-database integration by combining completed 
@@ -58,17 +91,38 @@ class IntegratedAnalytics:
             if data.get(b'session:session_id', b'').decode() == transaction['session_id']:
                 
                 page_views = []
-                # 4. Extract only the sparse page view columns
+                cart_items = {}
+                # 4a. Cart columns are a separate sparse family member; collect
+                #     them so cart/checkout steps can name their contents.
+                for col, value in data.items():
+                    if col.startswith(b'activity:cart_'):
+                        pid = col.decode().split('activity:cart_', 1)[1]
+                        try:
+                            cart_items[pid] = json.loads(value.decode())
+                        except json.JSONDecodeError:
+                            cart_items[pid] = {}
+
+                # 4b. Extract only the sparse page view columns
                 for col, value in data.items():
                     if col.startswith(b'activity:pv_'):
                         pv_data = json.loads(value.decode())
-                        
-                        # Save the column qualifier to use as a chronological sorting key
-                        pv_data['col_name'] = col.decode()
+
+                        col_name = col.decode()
+                        pv_data['col_name'] = col_name
+                        parsed = parse_pv_qualifier(col_name)
+                        pv_data.update(parsed)
                         page_views.append(pv_data)
-                
-                # 5. Sort chronologically (Descending because HBase uses reversed timestamps)
-                chronological_journey = sorted(page_views, key=lambda x: x['col_name'], reverse=True)
+
+                # 5. Sort chronologically. The qualifier embeds a REVERSED
+                #    timestamp, so descending numeric order on that value gives
+                #    ascending real time. Sorting on the parsed integer rather
+                #    than the raw string avoids lexicographic errors when
+                #    reversed timestamps differ in digit length. The sequence
+                #    index breaks ties within the same second.
+                chronological_journey = sorted(
+                    page_views,
+                    key=lambda x: (-x['reversed_ts'], x['sequence'])
+                )
                 
                 logger.info(f"Successfully reconstructed journey with {len(chronological_journey)} page views.")
                 
@@ -76,7 +130,8 @@ class IntegratedAnalytics:
                     "user_id": user_id,
                     "transaction_total": transaction['financials']['total'],
                     "items_purchased": len(transaction['items']),
-                    "journey": chronological_journey
+                    "journey": chronological_journey,
+                    "cart_items": cart_items
                 }
                 
         logger.warning(f"No matching HBase session found for MongoDB transaction {transaction_id}.")
@@ -108,19 +163,33 @@ if __name__ == "__main__":
             print(f"Items Bought: {journey_data['items_purchased']}")
             print("\nChronological Page Views Leading to Purchase:")
             
+            cart_items = journey_data.get('cart_items', {})
+            cart_summary = ", ".join(
+                f"{pid} x{item.get('quantity', '?')}" for pid, item in cart_items.items()
+            ) or "empty"
+
             for step, view in enumerate(journey_data['journey'], 1):
-                # Extract page_type from the column name (e.g., activity:pv_12345_home_000)
-                col_name = view.get('col_name', '')
-                try:
-                    # Split by '_' and grab the 3rd element which is the page_type
-                    page_type = col_name.split('_')[2].upper()
-                except IndexError:
-                    page_type = 'UNKNOWN'
-                
+                # page_type was parsed at extraction time; multi-word types such
+                # as 'category_listing' and 'product_detail' survive intact.
+                page_type = view.get('page_type', 'unknown').upper()
                 duration = view.get('duration', 0)
-                product_id = view.get('product_id', 'N/A')
-                
-                print(f"  Step {step}: {page_type:<10} | Duration: {duration}s | Product ID: {product_id}")
+
+                # Build the most specific context available for this page type.
+                # Only product_detail carries a product_id; category_listing
+                # carries a category_id; cart/checkout are described by the
+                # separate activity:cart_* columns. Anything else genuinely has
+                # no entity attached, which is why sparse storage suits it.
+                if view.get('product_id'):
+                    context = f"product={view['product_id']}"
+                elif view.get('category_id'):
+                    context = f"category={view['category_id']}"
+                elif page_type in ('CART', 'CHECKOUT', 'CONFIRMATION'):
+                    context = f"cart=[{cart_summary}]"
+                else:
+                    context = "-"
+
+                print(f"  Step {step:>2}: {page_type:<18} | {duration:>4}s | {context}")
+
             print("="*50 + "\n")
             
     analytics.close_connections()

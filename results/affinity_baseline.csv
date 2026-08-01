@@ -1,0 +1,2 @@
+distinct_products,total_pair_instances,possible_pairs,expected_count_per_pair,observed_max_count
+4935,11776904,12174645.0,0.967330382117918,14

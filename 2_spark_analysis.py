@@ -104,10 +104,63 @@ def process_spark_analytics():
     )
 
     logger.info("Top 5 Product Affinity Pairs (Frequently Viewed Together):")
-    recommendations.show(5, truncate=False)
+    top_pairs = recommendations.limit(5)
+    top_pairs.show(5, truncate=False)
+
+    # Persist for the visualisation layer (removes hard-coded values downstream)
+    results_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "results")
+    )
+    os.makedirs(results_dir, exist_ok=True)
+
+    top_pairs.toPandas().to_csv(
+        os.path.join(results_dir, "product_affinity.csv"), index=False
+    )
+    logger.info("Wrote results/product_affinity.csv")
+
+    # ---------------------------------------------------------------
+    # NULL-MODEL BASELINE
+    # The generator selects viewed products with random.choice(), so there is
+    # no latent affinity structure in the data. We quantify this rather than
+    # asserting the top pairs are meaningful: under uniform random viewing the
+    # expected count for any given pair is (total pair instances) / C(N, 2).
+    # A top count close to this baseline's tail means the "affinity" is noise.
+    # ---------------------------------------------------------------
+    total_pair_instances = product_pairs.count()
+    n_products = exploded_views.select("product_id").distinct().count()
+    possible_pairs = n_products * (n_products - 1) / 2
+    expected_per_pair = (
+        total_pair_instances / possible_pairs if possible_pairs > 0 else 0
+    )
+    observed_max = top_pairs.first()["co_occurrence_count"] if top_pairs.count() else 0
+
+    logger.info("--- AFFINITY SIGNIFICANCE CHECK ---")
+    logger.info(f"Distinct products viewed:      {n_products:,}")
+    logger.info(f"Total co-view pair instances:  {total_pair_instances:,}")
+    logger.info(f"Expected count per pair:       {expected_per_pair:.4f}")
+    logger.info(f"Observed maximum count:        {observed_max}")
+    logger.info(
+        "Interpretation: with ~%.0f candidate pairs, a maximum of %d is "
+        "consistent with the upper tail of random co-occurrence."
+        % (possible_pairs, observed_max)
+    )
+
+    import pandas as pd
+
+    pd.DataFrame(
+        [
+            {
+                "distinct_products": n_products,
+                "total_pair_instances": total_pair_instances,
+                "possible_pairs": possible_pairs,
+                "expected_count_per_pair": expected_per_pair,
+                "observed_max_count": observed_max,
+            }
+        ]
+    ).to_csv(os.path.join(results_dir, "affinity_baseline.csv"), index=False)
 
     # REQUIREMENT 3: Spark SQL Analytics
-    logger.info("Running Spark SQL Analytics: High-Value Customer Cohorts...")
+    logger.info("Running Spark SQL Analytics: Revenue by Geographic Region...")
 
     # Load and clean users
     raw_users = spark.read.option("multiline", "true").schema(user_schema).json(os.path.join(data_dir, "users.json"))
@@ -139,6 +192,26 @@ def process_spark_analytics():
     sql_results = spark.sql(complex_sql_query)
     logger.info("Top 10 States by Completed Transaction Revenue:")
     sql_results.show()
+
+    sql_pdf = sql_results.toPandas()
+    sql_pdf.to_csv(os.path.join(results_dir, "state_revenue.csv"), index=False)
+    logger.info("Wrote results/state_revenue.csv")
+
+    # Dispersion check: the generator assigns state via fake.state_abbr(),
+    # i.e. uniformly at random. If the spread across the top 10 is small,
+    # the ranking reflects sampling variation rather than genuine regional
+    # demand, and must not be read as a targeting recommendation.
+    if not sql_pdf.empty:
+        hi = sql_pdf["total_revenue"].max()
+        lo = sql_pdf["total_revenue"].min()
+        spread = (hi - lo) / lo * 100
+        logger.info("--- GEOGRAPHIC SIGNIFICANCE CHECK ---")
+        logger.info(f"Top-10 revenue range: ${lo:,.0f} - ${hi:,.0f}")
+        logger.info(f"Relative spread:      {spread:.1f}%")
+        logger.info(
+            "A narrow spread across uniformly-assigned states indicates the "
+            "ranking is not a demand signal."
+        )
 
     logger.info("Spark Analytics processing complete!")
     spark.stop()

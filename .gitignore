@@ -13,3 +13,5 @@ report/
 *.log
 *.aux
 *.out
+command.txt
+demo_queries.md
